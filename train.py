@@ -1,6 +1,5 @@
-# train.py
+""" Training script for PoseTransformer model on climbing pose sequences."""
 import os
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import torch
 from torch.utils.data import DataLoader
 from dataset import PoseSequenceDataset

@@ -1,4 +1,4 @@
-""" Dataset class for loading pose sequences from .npy files."""
+# dataset.py
 import os
 import torch
 import numpy as np
@@ -10,7 +10,7 @@ class PoseSequenceDataset(Dataset):
     Each pose frame is shape (33,4) -> we use only (x,y) and visibility optionally.
     """
 
-    def __init__(self, root_dir, seq_len=64, use_visibility=True, stride=8):
+    def __init__(self, root_dir, seq_len=64, use_visibility=True, stride=8, wall_size=(512,512)):
         """
         root_dir: folder containing subfolders each with poses.npy
         seq_len: number of frames per sequence
@@ -23,30 +23,27 @@ class PoseSequenceDataset(Dataset):
         self.files = []
         for sub in os.listdir(root_dir):
             p = os.path.join(root_dir, sub, "poses.npy")
-            if os.path.exists(p) and os.path.getsize(p) > 0:
-                self.files.append(p)
-
+            if os.path.exists(p):
+                # store tuple (poses.npy path, optional wall image path)
+                wall = os.path.join(root_dir, sub, "wall.jpg")
+                if not os.path.exists(wall):
+                    wall = os.path.join(root_dir, sub, "wall.png")
+                self.files.append((p, wall if os.path.exists(wall) else None))
         self.indices = []  # list of tuples (file_idx, start_frame)
 
-        for i, f in enumerate(self.files):
-            try:
-                with open(f, 'rb') as fd:
-                    version = np.lib.format.read_magic(fd)
-                    shape, _, _ = np.lib.format._read_array_header(fd, version)
-                n = shape[0]
-            except Exception as e:
-                print(f"Skipping {f}, cannot read shape: {e}")
-                continue
+        for i,f in enumerate(self.files):
+            arr = np.load(f, mmap_mode='r')
+            n = arr.shape[0]
             for s in range(0, n - seq_len + 1, stride):
                 self.indices.append((i, s))
-
 
     def __len__(self):
         return len(self.indices)
 
     def __getitem__(self, idx):
         file_idx, start = self.indices[idx]
-        arr = np.load(self.files[file_idx])
+        poses_path, wall_path = self.files[file_idx]
+        arr = np.load(poses_path)
         seq = arr[start:start+self.seq_len]  # (T, 33, 4)
         # take x,y normalized by image coordinates since mediapipe gives normalized [0,1]
         xy = seq[..., :2]  # (T, 33, 2)
@@ -65,4 +62,21 @@ class PoseSequenceDataset(Dataset):
         for t in range(T):
             data_xy[t,:,:2] = data_xy[t,:,:2] - mid_hip[t:t+1]  # center
         data = data_xy.reshape(T, L*D)
-        return torch.from_numpy(data).float()
+        pose_tensor = torch.from_numpy(data).float()
+
+        # load wall image if available, resize and normalize to [0,1]
+        img_tensor = None
+        if wall_path is not None:
+            try:
+                from PIL import Image
+                im = Image.open(wall_path).convert('RGB')
+                im = im.resize(self.wall_size)
+                arr_im = np.array(im).astype(np.float32) / 255.0  # (H,W,3)
+                # transpose to CHW
+                arr_im = np.transpose(arr_im, (2,0,1))
+                img_tensor = torch.from_numpy(arr_im).float()
+            except Exception as e:
+                # fallback to None
+                img_tensor = None
+
+        return pose_tensor, img_tensor

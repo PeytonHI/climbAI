@@ -3,47 +3,74 @@
 import yt_dlp
 import os
 
-video_dir = 'climbVideoTrainingDownloads/videos'
-# json_dir  = 'climbVideoTrainingDownloads/json'
+# Progress hook to report download progress
+# In: dictionaries of data from yt_dlp with keys like status, filename, percent, etc.
+#
+# docs: https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/YoutubeDL.py#L181
+def progressHook(data):
+    global lastPercentDownloaded
 
-os.makedirs(video_dir, exist_ok=True)
+    if data['status'] == 'downloading':
+        videoId = data['filename']
+        totalBytes = data.get('total_bytes', 0) # sometimes videos only report estimates of bytes
+
+        # No exact total bytes available, use estimate
+        if totalBytes is None or totalBytes == 0: 
+            totalBytes = data.get('total_bytes_estimate')
+
+        downloadedBytes = data.get('downloaded_bytes', 0)
+
+        # Avoid division by zero
+        if totalBytes is not None and totalBytes > 0: 
+            percentDownloaded = int(downloadedBytes / totalBytes * 100)
+
+            # Print 10% increments
+            incrementValue = 10
+            currentIncrement = percentDownloaded // incrementValue
+            lastIncrement = lastPercentDownloaded.get(videoId, 0) // incrementValue
+
+            # Track videos already seen, only print when increment changes
+            if currentIncrement > lastIncrement:
+                print(f"{videoId}: {percentDownloaded}%")
+                lastPercentDownloaded[videoId] = percentDownloaded
+
+    # All pau             
+    elif data['status'] == 'finished':
+        print(f"Finished: {data['filename']}")
+
+### Main
+
+# Set up download directories
+videoDir = os.path.join("climbVideoTrainingDownloads", "videos",)
+# json_dir  = os.path.join("climbVideoTrainingDownloads", "json")
 # os.makedirs(json_dir, exist_ok=True)
+os.makedirs(videoDir, exist_ok=True)
 
-def progress_hook(d):
-    last_percent = {}
-    if d['status'] == 'downloading':
-        # old_name = d['filename']
-        # new_name = os.path.splitext(old_name)[0]  # removes extension
-        # os.rename(old_name, new_name)
-        # print(f"Renamed {old_name} → {new_name}")
-        video_id = d['filename']
-        total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate')
-        downloaded = d.get('downloaded_bytes', 0)
-        if total_bytes:
-            percent = int(downloaded / total_bytes * 100)
-            # Only print if 10% increment
-            if video_id not in last_percent or percent // 10 > last_percent[video_id] // 10:
-                print(f"{video_id}: {percent}%")
-                last_percent[video_id] = percent
-    elif d['status'] == 'finished':
-        print(f"Finished: {d['filename']}")
+lastPercentDownloaded = {}
 
-yt_dlp_options = {
-    'format': 'bestvideo[ext=mp4]',
+# yt_dlp options for downloading videos and json info
+ytDlpOptions = {
+    'format': 'bestvideo[ext=mp4]', # best available mp4 format, skip other formats for now
     # 'write_info_json': True,
-    'skip_download': False,
-    'ignorealreadydownloaded': True,
+    # 'skip_download': True, # for testing json only
+    'download_archive': f'{videoDir}/archive.txt', # to avoid redownloading, yt_dlp will check for existing entries 
+
+    # Output template (how and where to save files)
+    # specify default download path, yt_dlp expects this format, % are placeholders and s converts to string from yt_dlp api
     'outtmpl': {
-        'default': f'{video_dir}/%(title)s.%(ext)s'
+        'default': f'{videoDir}/%(title)s.%(ext)s'
         # 'infojson': f'{json_dir}/%(playlist)s/%(title)s.%(ext)s'
     },
-    'progress_hooks': [progress_hook]
-}
+    'progress_hooks': [progressHook],  # yt_dlp calls a list of functions periodically for differing progress updates
 
-playlist_url = "https://www.youtube.com/shorts/UBpd5yCCYOs"
+}
+playlistUrl = "https://www.youtube.com/shorts/UBpd5yCCYOs" # lovely hard code for now until CL added
 
 print("Starting download...")
-with yt_dlp.YoutubeDL(yt_dlp_options) as ydl:
-    ydl.download([playlist_url])
+
+# Use yt_dlp to download the playlist
+with yt_dlp.YoutubeDL(ytDlpOptions) as ydl:
+    ydl.download([playlistUrl])
+
 print("Download complete.")
 

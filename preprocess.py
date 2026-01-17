@@ -1,13 +1,14 @@
-# preprocess.py
+""" Preprocessing script to extract frames from climbing videos and obtain pose landmarks using MediaPipe. """
 import cv2
 import mediapipe as mp
 import numpy as np
 import os
 from tqdm import tqdm
 
-mpPose = mp.solutions.pose
+# Globals
+mpPose = mp.solutions.pose # load MediaPipe solutions.pose module, create pose object
 
-def extractFrames(videoPath, outFramesDir, fpsTarget=30):
+def extractFramesFromVideo(videoPath, outFramesDir, fpsTarget=30):
     cap = cv2.VideoCapture(videoPath)
     origFps = cap.get(cv2.CAP_PROP_FPS) or fpsTarget
     frameStep = max(1, int(round(origFps / fpsTarget)))  # slowdown fps to target fps
@@ -33,35 +34,68 @@ def extractFrames(videoPath, outFramesDir, fpsTarget=30):
     print(f"Saved {saved} frames to {outFramesDir}")
     # return saved
 
-def extractPoseFromFrames(framesDir, outPoseNpy, visibilityThresh=0.3):
-    print("Extracting poses from frames in:", framesDir)
+# Extract pose landmarks from all frames from a file
+# In: framesFileDir (directory containing frames for a single video)
+# Out: poses (numpy array of shape (numFrames, 33, 4))
+# Args:
+#   framesFileDir: directory containing frames for a single video
+#   visibilityThresh: minimum visibility threshold for landmarks (joints detected from person, 0-1, changeable)
+def extractPoseFromFrames(framesFileDir, visibilityThresh=0.3):
+    print("Extracting poses from frames in:", framesFileDir)
+
+    # Get list of all frame files paths in framesFileDir
     poseFiles = []
-    for f in os.listdir(framesDir):
-        if f.endswith(".jpg"):
-            poseFiles.append(os.path.join(framesDir, f))
-    poseList = []
-    # Use MediaPipe Pose to extract landmarks
+    for file in os.listdir(framesFileDir):
+        if file.endswith(".jpg"):
+            poseFiles.append(os.path.join(framesFileDir, file))
 
-    print("Files found in framesDir:", os.listdir(framesDir))
+    poseList = []  # list to store pose landmarks for each frame
 
-    with mpPose.Pose(static_image_mode=True, model_complexity=0) as pose:
-        for f in tqdm(poseFiles, desc="Pose"):
-            img = cv2.imread(f)
-            imgRgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            res = pose.process(imgRgb)
-            if res.pose_landmarks:
-                # 33 landmarks: each with x, y, z, visibility
-                lm = res.pose_landmarks.landmark
-                arr = np.array([[p.x, p.y, p.z, p.visibility if p.visibility >= visibilityThresh else 0.0] for p in lm], dtype=np.float32)
+    print("Files found in framesFileDir:", os.listdir(framesFileDir))
+
+    # Use MediaPipe Pose to extract landmarks from each frame
+    # Params: static_image_mode=False (true = treat input images as static, false = video [default]), 
+    #   min_detection_confidence (minimum model confidence for detection, higher = more accurate but potentially less detections),
+    #   min_tracking_confidence (minimum model confidence for tracking, higher = more accurate but potentially less tracks),
+    #   model_complexity=0 (lightweight model -> 0,1,2 options for heavier/better)
+    # Notes:
+    #   mpPose object is using python context manager -> with .. as.. calls object. __enter__, then object.__exit__  at end of block 
+    #   from mpPose.Pose and assigns whatever __enter__ returns to the variable after "as" (in this case, pose)
+    with mpPose.Pose(static_image_mode=False, min_detection_confidence = 0.8, min_tracking_confidence=0.8, model_complexity=0) as pose:
+        for frameFile in tqdm(poseFiles, desc="Pose"): # progress bar
+            img = cv2.imread(frameFile)
+            imgRgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # cv2 uses BGR by default, convert to RGB
+            result = pose.process(imgRgb) # extract pose landmarks from most prominent person detected (pose doc strings)
+            
+            # landmarks detected? extract list of landmarks from NamedTuple objects (pose module documentation)
+            # extracts a list-like container of our landmarks (can access like a list).. I don't like this, check pose module documentation
+            # 33 landmarks (1 per joint of person detected): each with x, y, z, visibility attributes
+            if result.pose_landmarks:
+                landmarks = result.pose_landmarks.landmark 
+                array = [] 
+                for lm in landmarks:  # iterate over 33 landmarks, only keep those with visibility above threshold
+                    if lm.visibility >= visibilityThresh:  
+                        visibility = lm.visibility 
+                    else:
+                        visibility = 0.0
+                    array.append([lm.x, lm.y, lm.z, visibility]) 
+                array = np.array(array, dtype=np.float32) # make sure float values
             else:
-                arr = np.zeros((33, 4), dtype=np.float32)  # no detection -> zeros
-            poseList.append(arr)
-    poses = np.stack(poseList)  # (numFrames, 33, 4)
-    np.save(outPoseNpy, poses)
-    print("Saved poses:", outPoseNpy, poses.shape)
+                array = np.zeros((33, 4), dtype=np.float32) # no detection -> default to zeros, (33, 4) = 33 landmarks, 4 attributes (x, y, z, visibility)
+            poseList.append(array) # list of landmark lists of each frame -> 
+    if not poseList:
+        print(f"No poses found for {framesFileDir}")
+        return None
+    else:
+        poses = np.stack(poseList)  # dims = (numFrames, 33, 4)
+    np.save("poses.npy", poses)  # save poses to .npy file
+    print("Saved poses:", "poses.npy", poses.shape)
+
     return poses
 
+
 if __name__ == "__main__":
+    # For command-line usage
     # import argparse
     # parser = argparse.ArgumentParser()
     # parser.add_argument("--video", required=True)
@@ -80,32 +114,32 @@ if __name__ == "__main__":
 
     # jsonDir = os.path.join("climbVideoTrainingDownloads","json")
 
+
+    # Temporary python only usage
     print("Processing all videos in downloaded directory...")
+    
+    baseDir = os.path.dirname(os.path.abspath(__file__))
+    videoDir = os.path.join(baseDir, "climbVideoTrainingDownloads", "videos")
+    os.makedirs(videoDir, exist_ok=True)
+    os.makedirs("data", exist_ok=True)
 
-    # videoDir = os.path.join("climbVideoTrainingDownloads", "videos")
-    videoDir = r"E:\videos"
-
-    outRoot = "data"
-    os.makedirs(outRoot, exist_ok=True)
-
+    # Process each video file
     for origVideoFile in os.listdir(videoDir):
         if not origVideoFile.endswith(".mp4"):
             continue
         
-        videoFile = origVideoFile.removesuffix("mp4")
-        videoFile = os.path.splitext(videoFile)[0]
-        if videoFile not in os.listdir(outRoot):
-            print(f"Processing video: {videoFile}")
-            videoPath = os.path.join(videoDir, origVideoFile)
-            base = os.path.splitext(videoFile)[0]
-            # base = videoFile.removesuffix("mp4")
+        videoFileName = origVideoFile.removesuffix(".mp4")
 
-            framesDir = os.path.join("data", base, "frames")
-            os.makedirs(framesDir, exist_ok=True)
-            extractFrames(videoPath, framesDir, fpsTarget=30)
+        # Check if video has already been processed
+        if videoFileName not in os.listdir("data"):
+            print(f"Processing video: {videoFileName}")
+            videoFilePath = os.path.join(videoDir, origVideoFile)
+            framesFileDir = os.path.join("data", videoFileName, "frames")
+            os.makedirs(framesFileDir, exist_ok=True)
 
-            poseNpy = os.path.join("data", base, "poses.npy")
-            os.makedirs(os.path.dirname(poseNpy), exist_ok=True)
-            extractPoseFromFrames(framesDir, poseNpy)
+            # extractFramesFromVideo(videoFilePath, framesFileDir, fpsTarget=30) # extract frames from single video
+            poseNpyDir= os.path.join("data", videoFileName, "poses")
+            os.makedirs(poseNpyDir, exist_ok=True)
 
-            print(f"Finished processing {videoFile}\n")
+            extractPoseFromFrames(framesFileDir) # extract poses from all frames of single video
+            print(f"Finished processing {videoFileName}\n")

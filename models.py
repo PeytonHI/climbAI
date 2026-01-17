@@ -1,4 +1,4 @@
-# models.py
+""" PoseTransformer model definition for climbing pose sequences."""
 import torch
 import torch.nn as nn
 import math
